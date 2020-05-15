@@ -310,8 +310,8 @@ close(INFO);
 # tacmd editsystemlist {-e|--edit} FILENAME
 # {[{-a|--add} SYSTEM ...] [{-d|--delete} SYSTEM ...]}
 
-my $opt_dup2do = "dup2do.cmd";
-my $opt_dup2do_sh  = "dup2do.sh";
+my $opt_dup2do = "dup2doc.cmd";
+my $opt_dup2do_sh  = "dup2doc.sh";
 open DP2SH, ">$opt_dup2do_sh" or die "can't open $opt_dup2do_sh: $!";
 binmode(DP2SH);
 open DP2CMD, ">$opt_dup2do" or die "can't open $opt_dup2do: $!";
@@ -371,7 +371,7 @@ close(DP2CMD);
 # 5) compose a report for manual corrections
 #      first the MSL additions
 
-my $opt_dup2do_csv = "dup2do.csv";
+my $opt_dup2do_csv = "dup2doc.csv";
 open DP2CSV, ">$opt_dup2do_csv" or die "can't open $opt_dup2do_csv: $!";
 print DP2CSV "* Manual Checklist for ITM repair after duplicate agent recovery dup2do.sh or dup2do.cmd\n";
 print DP2CSV "* First stage is repairing the Managed System Lists\n";
