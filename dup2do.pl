@@ -42,7 +42,9 @@ my $opt_dupsleep;
 
 my %dupallx = ();
 
+$DB::single=2;
 while (@ARGV) {
+$DB::single=2;
    if ($ARGV[0] eq "-h") {
       &GiveHelp;                        # print help and exit
    }
@@ -55,7 +57,6 @@ while (@ARGV) {
             shift(@ARGV);
          }
       }
-      shift(@ARGV);
    } elsif ($ARGV[0] eq "-dupsleep") {
       shift(@ARGV);
       if (defined $ARGV[0]) {
