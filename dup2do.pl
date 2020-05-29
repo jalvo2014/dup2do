@@ -29,6 +29,10 @@ use Data::Dumper;               # debug only
 my $gVersion = "0.50000";
 my $gWin = (-e "C://") ? 1 : 0;    # 1=Windows, 0=Linux/Unix
 
+sub init_txt;
+sub init_lst;
+my $ll;
+
   # agent suffixes which represent distributed OS Agents
 my %agtosx = ( 'NT' => 1,
                'LZ' => 1,
@@ -42,9 +46,7 @@ my $opt_dupsleep;
 
 my %dupallx = ();
 
-$DB::single=2;
 while (@ARGV) {
-$DB::single=2;
    if ($ARGV[0] eq "-h") {
       &GiveHelp;                        # print help and exit
    }
@@ -92,7 +94,7 @@ my %systemx = ();                    # data about agents and systems
 my $dedup_fn = "dedup.csv";
 die "no dedup,csv file" if ! -e $dedup_fn;
 open(DDUP, "< $dedup_fn") || die("Could not open dedup report  $dedup_fn\n");
-# Primary:GDCUWVC0366:NT,GDCUWVC0366-DUP1,,
+# blinstp:sml_smlpxls050:UD,ip.spipe:#172.31.250.13,
 while ($oneline = <DDUP>){
    last if !defined $oneline;
    $oneline =~ /([^,]*),([^,]*),/;
@@ -152,6 +154,8 @@ while ($oneline = <DDUP>){
                          count => 0,                 # count of ITM agents running on the system
                          agents => [],               # array of agent running
                          osagent => "",              # if there is a OS Agent, record its name here
+                         tnodesav_lines => [],       # lines from TNODESAV if present
+                         dedup_lines => [],          # lines from DEDUP.CSV
                       );
       $system_ref = \%systemref;
       $systemx{$iip} = \%systemref;
@@ -159,11 +163,45 @@ while ($oneline = <DDUP>){
    $system_ref->{count} += 1;                        # count of agents on system
    push @{$system_ref->{agents}},$inode;             # add one more to the lists
    $system_ref->{osagent} = $inode if defined $agtosx{$agent_ref->{pc}}; # set os agent name if suffix is correct
+   push @{$system_ref->{dedup_lines}},$oneline;      # add one more to the lists
 }
 close(DDUP);
 
+# 2) if QA1DNSAV.DB.TXT or QA1DNSAV.DB.LST is present read in that data and create an DEDUP_EN,CSV file
+my $opt_txt_tnodesav = "QA1DNSAV.DB.TXT";
+my $opt_lst_tnodesav = "QA1DNSAV.DB.LST";
+my $tnodesav_ct = 0;
+sub init_txt;
+sub init_lst;
+if (-e $opt_txt_tnodesav) {
+   init_txt();
+} elsif (-e $opt_lst_tnodesav) {
+$DB::single=2;
+   init_lst();
+}
 
-# 2) create setagent connection command files to change the apparent hostname on all but first example
+if ($tnodesav_ct > 0) {
+   # compose a a dedup_plus.csv with tnodesav data
+
+   my $opt_dup2do_plus_csv = "dup2dop.csv";
+   open DPP2CSV, ">$opt_dup2do_plus_csv" or die "can't open $opt_dup2do_plus_csv: $!";
+   print DPP2CSV "* DEDUP.CSV with embedded TNODESAV data\n";
+   print DPP2CSV "IP,Source,dup=DEDUP.CSV msn=TNODESAV data\n";
+   foreach my $s (sort { $a cmp $b } keys %systemx) {
+      my $system_ref = $systemx{$s};
+      foreach my $line (@{$system_ref->{dedup_lines}}){
+         print DPP2CSV "$s,dup,$line";
+      }
+      foreach my $line (@{$system_ref->{tnodesav_lines}}){
+         print DPP2CSV "$s,$line\n";
+      }
+      print DPP2CSV "\n";
+   }
+   close DPP2CSV;
+}
+
+
+# 3) create setagent connection command files to change the apparent hostname on all but first example
 
 my $opt_dedup_sh;                               # names of output files, unix-style sh and Windows syle cmd
 my $opt_dedup_cmd;
@@ -206,7 +244,7 @@ close(DEPSH);
 close(DEPCMD);
 
 
-# 3) extract relevant data from sitinfo.csv
+# 4) extract relevant data from sitinfo.csv
 #    stage I - situations involved with duplicated agents
 #    stage II - distributions involved with duplicated agents
 
@@ -304,7 +342,7 @@ close(INFO);
 
 
 
-# 4) Generate tacmd editsit and tacmd editsystemlist commands to add the new names
+# 5) Generate tacmd editsit and tacmd editsystemlist commands to add the new names
 
 # first editsystemlists these will be adds
 
@@ -369,7 +407,7 @@ foreach my $s (keys %sitdx) {
 close(DP2SH);
 close(DP2CMD);
 
-# 5) compose a report for manual corrections
+# 6) compose a report for manual corrections
 #      first the MSL additions
 
 my $opt_dup2do_csv = "dup2doc.csv";
@@ -410,3 +448,192 @@ foreach my $s (keys %sitdx) {
 close(DP2CSV);
 
 exit 0;
+sub new_tnodesav {
+   my ($inode,$iproduct,$iversion,$io4online,$ihostaddr,$ireserved,$ithrunode,$ihostinfo,$iaffinities) = @_;
+   my $iip;
+
+   # calculate the ip address of the duplicate agent. Some hostaddrs have port numbers and some not.
+   if (index($ihostaddr,"[") != -1) {
+      $ihostaddr =~ /:#(\S+)\[(\S*)\]/;
+      $iip = $1 if defined $1;                # a $1 does not survive and if or else clause
+   } else {
+      $ihostaddr =~ /#(\S*)/;
+      $iip = $1 if defined $1;
+   }
+   return if !defined $iip;
+   my $system_ref = $systemx{$iip};
+   return if !defined $system_ref;
+   my $oline = "msn,";
+   $oline .= $inode . ",";
+   $oline .= $io4online . ",";
+   $oline .= $iproduct . ",";
+   $oline .= $iversion . ",";
+   $oline .= $ihostaddr . ",";
+   push @{$system_ref->{tnodesav_lines}},$oline;
+   $tnodesav_ct += 1;
+}
+
+sub init_txt {
+
+$DB::single=2;
+   my @ksav_data;
+   my $inode;
+   my $io4online;
+   my $iproduct;
+   my $iversion;
+   my $ihostaddr;
+   my $ihostinfo;
+   my $ireserved;
+   my $ithrunode;
+   my $iaffinities;
+
+   open(KSAV, "< $opt_txt_tnodesav") || die("Could not open TNODESAV $opt_txt_tnodesav\n");
+   @ksav_data = <KSAV>;
+   close(KSAV);
+   # Get data for all TNODESAV records
+   $ll = 0;
+   foreach $oneline (@ksav_data) {
+      $ll += 1;
+      next if $ll < 5;
+      chop $oneline;
+      $oneline .= " " x 400;
+      $inode = substr($oneline,0,32);
+      $inode =~ s/\s+$//;   #trim trailing whitespace
+      $io4online = substr($oneline,33,1);
+      $iproduct = substr($oneline,42,2);
+      $iproduct =~ s/\s+$//;   #trim trailing whitespace
+      if ($io4online eq "N") {
+         next if $iproduct eq "";
+      }
+      $iversion = substr($oneline,50,8);
+      $iversion =~ s/\s+$//;   #trim trailing whitespace
+      $ihostaddr = substr($oneline,59,256);
+      $ihostaddr =~ s/\s+$//;   #trim trailing whitespace
+      $ireserved = substr($oneline,315,64);
+      $ireserved =~ s/\s+$//;   #trim trailing whitespace
+      $ithrunode = substr($oneline,380,32);
+      $ithrunode =~ s/\s+$//;   #trim trailing whitespace
+      $ihostinfo = substr($oneline,413,16);
+      $ihostinfo =~ s/\s+$//;   #trim trailing whitespace
+      $iaffinities = substr($oneline,430,43);
+      $iaffinities =~ s/\s+$//;   #trim trailing whitespace
+      new_tnodesav($inode,$iproduct,$iversion,$io4online,$ihostaddr,$ireserved,$ithrunode,$ihostinfo,$iaffinities);
+   }
+}
+
+
+sub parse_lst {
+  my ($lcount,$inline,$cref) = @_;            # count of desired chunks and the input line
+  my @retlist = ();                     # an array of strings to return
+  my $chunk = "";                       # One chunk
+  my $oct = 1;                          # output chunk count
+  my $rest;                             # the rest of the line to process
+  $inline =~ /\]\s*(.*)/;               # skip by [NNN]  field
+  $rest = " " . $1 . "        ";
+  my $fixed;
+  my $lenrest = length($rest);          # length of $rest string
+  my $restpos = 0;                      # postion studied in the $rest string
+  my $nextpos = 0;                      # floating next position in $rest string
+
+  # KwfSQLClient logic wraps each column with a leading and trailing blank
+  # simple case:  <blank>data<blank><blank>data1<blank>
+  # data with embedded blank: <blank>data<blank>data<blank><data1>data1<blank>
+  #     every separator is always at least two blanks, so a single blank is always embedded
+  # data with trailing blank: <blank>data<blank><blank><blank>data1<blank>
+  #     given the rules has to be leading or trailing blank and chose trailing on data
+  # data followed by a null data item: <blank>data<blank><blank><blank><blank>
+  #                                                            ||
+  # data with longer then two blanks embedded must be placed on end, or handled with a cref hash.
+  #
+  # $restpos always points within the string, always on the blank delimiter at the end
+  #
+  # The %cref hash specifies chunks that are of guaranteed fixed size... passed in by caller
+  while ($restpos < $lenrest) {
+     $fixed = $cref->{$oct};                   #
+     if (defined $fixed) {
+        $chunk = substr($rest,$restpos+1,$fixed);
+        push @retlist, $chunk;                 # record null data chunk
+        $restpos += 2 + $fixed;
+        $chunk = "";
+        $oct += 1;
+        next;
+     }
+     if ($oct >= $lcount) {                                   # handle last item
+        $chunk = substr($rest,$restpos+1);
+        $chunk =~ s/\s+$//;                    # strip trailing blanks
+        push @retlist, $chunk;                 # record last data chunk
+        last;
+     }
+     if ((substr($rest,$restpos,3) eq "   ") and (substr($rest,$restpos+3,1) ne " ")) {          # following null entry
+        $chunk = "";
+        $oct += 1;
+        push @retlist, $chunk;                 # record null data chunk
+        $restpos += 2;
+        next;
+     }
+     if ((substr($rest,$restpos,2) eq "  ") and (substr($rest,$restpos+2,1) ne " ")) {            # trailing blank on previous chunk so ignore
+        $restpos += 1;
+        next;
+     }
+
+     $nextpos = index($rest," ",$restpos+1);
+     if (substr($rest,$nextpos,2) eq "  ") {
+        $chunk .= substr($rest,$restpos+1,$nextpos-$restpos-1);
+        push @retlist, $chunk;                 # record new chunk
+        $chunk = "";                           # prepare for new chunk
+        $oct += 1;
+        $restpos = $nextpos + 1;
+     } else {
+        $chunk .= substr($rest,$restpos+1,$nextpos-$restpos); # record new chunk fragment
+        $restpos = $nextpos;
+     }
+  }
+  return @retlist;
+}
+
+sub init_lst {
+   my @ksav_data;
+   my $inode;
+   my $iproduct;
+   my $iversion;
+   my $ihostaddr;
+   my $ihostinfo;
+   my $io4online;
+   my $ireserved;
+   my $ithrunode;
+   my $iaffinities;
+
+   # Parsing the KfwSQLClient output has some challenges. For example
+   #      [1]  OGRP_59B815CE8A3F4403  2010  Test Group 1
+   # Using the blank delimiter is OK for columns that are never blank or have no embedded blanks.
+   # In this case the GRPNAME column is "Test Group 1". To manage this the SQL is arranged so
+   # that a column with embedded blanks always placed at the end. The one table TSITDESC which has
+   # two such columns can be retrieved with two separate SQLs.
+   #
+
+   open(KSAV, "< $opt_lst_tnodesav") || die("Could not open TNODESAV $opt_lst_tnodesav\n");
+   @ksav_data = <KSAV>;
+   close(KSAV);
+
+   # Get data for all TNODESAV records
+   $ll = 0;
+   foreach $oneline (@ksav_data) {
+      $ll += 1;
+      next if substr($oneline,0,1) ne "[";                    # Look for starting point
+      chop $oneline;
+      # KfwSQLClient /e "SELECT NODE,O4ONLINE,PRODUCT,VERSION,HOSTADDR,RESERVED,THRUNODE,HOSTINFO,AFFINITIES FROM O4SRV.TNODESAV" >QA1DNSAV.DB.LST
+      #[1]  BNSF:TOIFVCTR2PW:VM  Y  VM  06.22.01  ip.spipe:#10.121.54.28[11853]<NM>TOIFVCTR2PW</NM>  A=00:WIX64;C=06.22.09.00:WIX64;G=06.22.09.00:WINNT;  REMOTE_catrste050bnsxa  000100000000000000000000000000000G0003yw0a7
+      ($inode,$io4online,$iproduct,$iversion,$ihostaddr,$ireserved,$ithrunode,$ihostinfo,$iaffinities) = parse_lst(9,$oneline);
+
+      $inode =~ s/\s+$//;   #trim trailing whitespace
+      $iproduct =~ s/\s+$//;   #trim trailing whitespace
+      $iversion =~ s/\s+$//;   #trim trailing whitespace
+      $io4online =~ s/\s+$//;   #trim trailing whitespace
+      $ihostaddr =~ s/\s+$//;   #trim trailing whitespace
+      $ireserved =~ s/\s+$//;   #trim trailing whitespace
+      $ithrunode =~ s/\s+$//;   #trim trailing whitespace
+      $ihostinfo =~ s/\s+$//;   #trim trailing whitespace
+      $iaffinities =~ s/\s+$//;   #trim trailing whitespace
+      new_tnodesav($inode,$iproduct,$iversion,$io4online,$ihostaddr,$ireserved,$ithrunode,$ihostinfo,$iaffinities);
+   }
+}
