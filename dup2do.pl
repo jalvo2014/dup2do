@@ -27,7 +27,7 @@ use strict;
 use warnings;
 use Data::Dumper;               # debug only
 
-my $gVersion = "0.54000";
+my $gVersion = "0.55000";
 my $gWin = (-e "C://") ? 1 : 0;    # 1=Windows, 0=Linux/Unix
 
 sub init_txt;
@@ -78,8 +78,7 @@ my %managex = ();                    # Data about managing agents
 my %subnodex = ();                   # Data from subnode agent view
 my %nodex = ();                      # Data from nodes from TNODESAV
 my %dupnodex = ();                   # Systems which showed duplicate evidence
-my %zosagtx = ();                    # Track and ignore z/OS agents
-my %osystemx = ();                   # ip address => OS Agent lookup
+my %zosagtx = ();                    # track and ignore z/OS agents
 
 my $opt_dupall;
 my $opt_dupsleep;
@@ -126,7 +125,6 @@ if (-e $opt_txt_tnodesav) {
 } elsif (-e $opt_lst_tnodesav) {
    init_lst();
 }
-
 
 # 2) read in the dedup.csv file so sitinfo.csv can be read selectively
 #    The dedup.csv file is created by TEMS Audit when -dup option specified
@@ -369,7 +367,6 @@ foreach my $f (keys %agentx) {                                                  
       print $dedup_cmd_fh "$outcmd\n";
       next;
    }
-   # first stage, handle duplicate os agents
    $dup_ct = 0;                                                                    # set counter - control working on second and later agents
    foreach my $g (keys %{$agent_ref->{ipx}}) {
       my $system_ref = $systemx{$g};
@@ -402,53 +399,6 @@ foreach my $f (keys %agentx) {                                                  
          print $dedup_sh_fh "sleep $opt_dupsleep\n" if $opt_dupsleep != 0;                               # sleep in Linux/Unix
          print $dedup_cmd_fh "choice /C YNC /D Y /N /T $opt_dupsleep >NUL 2>&1\n" if $opt_dupsleep != 0; # sleep in Windows
       }
-      my $newagent = $f;
-      $newagent =~ s/$agent_ref->{hostname}/$duphostname/;                         # remember the new agent name
-      push @{$agent_ref->{newagents}},$newagent;
-   }
-
-   # second stage, handle duplicate non-os agents where an os agent exists on that same system
-   # The change hostname can happen if an OS Agent is present on the system
-   $dup_ct = 0;                                                                    # set counter - control working on second and later agents
-   foreach my $g (keys %{$agent_ref->{ipx}}) {
-      my $system_ref = $systemx{$g};
-      next if $f eq $system_ref->{osagent};                                        # Ignore OS Agents
-      $dup_ct += 1;                                                                # Add one to counter and skip first
-      my $iosagent = $osystemx{$g};
-      if (!defined $iosagent) {
-         if ($dup_ct >= 2) {                                                         # Maybe the next one has an OS Agent
-            my $outsh  = "# Agent $f on systems[$g] has no identified OS Agents - reconfigure manually";        # tacmd setagentconnection for Linux/Unix
-            my $outcmd  = "REM Agent $f on systems[$g] has no identified OS Agents - reconfigure manually";     # tacmd setagentconnection for Linux/Unix
-            print $dedup_sh_fh "$outsh\n";
-            print $dedup_cmd_fh "$outcmd\n";
-         }
-         next;
-      }
-      next if $dup_ct < 2;                                                         # Skiping the first
-      my $iscope = "-t " . $agent_ref->{pc};                                       # working on just OS Agent
-      $iscope = "-a" if defined $dupallx{$agent_ref->{hostname}};                  # working on all agents where OS Agent is running
-      my $name_ct = $dup_ct - 1;                                                   # calculate the duplicate hostname
-      my $iname =  $agent_ref->{hostname};
-      my $headway = 32 - length($iname);
-      my $pname =  "-DUP" . $name_ct;
-      my $plen = length($pname);
-      my $duphostname;
-      if ($plen <= $headway) {
-         $duphostname = $iname . $pname;
-      } else {
-         my $dpos = length($iname) - length($pname);
-         $duphostname = substr($iname,0,$dpos) . $pname;
-      }
-      my $outsh  = "./tacmd setagentconnection -n $iosagent $iscope ";                    # tacmd setagentconnection for Linux/Unix
-      $outsh .= "-e CTIRA_HOSTNAME=" . $duphostname . " ";
-      $outsh .= "CTIRA_SYSTEM_NAME=" . $duphostname . " ";
-      my $outcmd = "tacmd setagentconnection -n $iosagent $iscope ";                      # tacmd setagentconnection for Windows
-      $outcmd .= "-e CTIRA_HOSTNAME=" . $duphostname . " ";
-      $outcmd .= "CTIRA_SYSTEM_NAME=" . $duphostname . " ";
-      print $dedup_sh_fh "$outsh\n";
-      print $dedup_cmd_fh "$outcmd\n";
-
-      # no need to wait after OS Agent changes name of non-os agent
       my $newagent = $f;
       $newagent =~ s/$agent_ref->{hostname}/$duphostname/;                         # remember the new agent name
       push @{$agent_ref->{newagents}},$newagent;
@@ -850,10 +800,7 @@ sub new_tnodesav {
    }
    $system_ref->{count} += 1;                        # count of agents on system
    push @{$system_ref->{agents}},$inode;             # add one more to the lists
-   if (defined $agtosx{$iproduct}) {
-      $system_ref->{osagent} = $inode;               # set os agent name if suffix is correct
-      $osystemx{$iip} = $inode;                      # record ip to os agent
-   }
+   $system_ref->{osagent} = $inode if defined $agtosx{$iproduct}; # set os agent name if suffix is correct
 
    my $oline = "msn,";
    $oline .= $inode . ",";
@@ -1092,3 +1039,5 @@ sub init_lst {
 #         - make better output names
 #         - handle Situation Group distributions
 # 0.54000 - handle some non-OS Agent cases
+# 0.55000 - Don't use setagentconnection on MQ type agents
+#         - more non-os agent logic improvements
