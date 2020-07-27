@@ -375,6 +375,13 @@ foreach my $f (sort { $a cmp $b } keys %agentx) {                               
       print $dedup_cmd_fh "$outcmd\n";
       next;
    }
+   if ($agent_ref->{pc} eq "MQ") {
+      my $outsh  = "# Agent $f is on systems[$sys] and cfg file needs SET AGENT NAME set";        # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f is on systems[$sys] and cfg file needs SET AGENT NAME set";    # tacmd setagentconnection for Linux/Unix
+      print $dedup_sh_fh "$outsh\n";
+      print $dedup_cmd_fh "$outcmd\n";
+      next;
+   }
    $dup_ct = 0;                                                                    # set counter - control working on second and later agents
    foreach my $g (keys %{$agent_ref->{ipx}}) {
       my $system_ref = $systemx{$g};
@@ -1049,4 +1056,4 @@ sub init_lst {
 # 0.54000 - handle some non-OS Agent cases
 # 0.55000 - Don't use setagentconnection on MQ type agents
 #         - more non-os agent logic improvements
-# 0.56000 - Handke more non-OS Agent cases, do not change HD/WPA agents
+# 0.56000 - Handle more non-OS Agent cases, do not change HD/WPA agents
