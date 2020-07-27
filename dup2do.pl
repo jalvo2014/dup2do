@@ -27,7 +27,7 @@ use strict;
 use warnings;
 use Data::Dumper;               # debug only
 
-my $gVersion = "0.55000";
+my $gVersion = "0.56000";
 my $gWin = (-e "C://") ? 1 : 0;    # 1=Windows, 0=Linux/Unix
 
 sub init_txt;
@@ -349,7 +349,8 @@ binmode $dedup_sh_fh ;
 open $dedup_cmd_fh, ">", $opt_dedup_cmd or die "can't open $opt_dedup_cmd: $!";
 
 my $dup_ct;
-foreach my $f (keys %agentx) {                                                     # look at each agent
+my $agent_pc;
+foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
    my $agent_ref=$agentx{$f};
    next if $agent_ref->{count} < 2;                                                # ignore if less than two examples
    my $tot_ct = 0;
@@ -367,10 +368,17 @@ foreach my $f (keys %agentx) {                                                  
       print $dedup_cmd_fh "$outcmd\n";
       next;
    }
+   if ($agent_ref->{pc} eq "Warehouse") {
+      my $outsh  = "# Agent $f is a WPA on systems[$sys] and needs manual configuration";        # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f is a WPA on systems[$sys] and needs manual configuration";             # tacmd setagentconnection for Linux/Unix
+      print $dedup_sh_fh "$outsh\n";
+      print $dedup_cmd_fh "$outcmd\n";
+      next;
+   }
    $dup_ct = 0;                                                                    # set counter - control working on second and later agents
    foreach my $g (keys %{$agent_ref->{ipx}}) {
       my $system_ref = $systemx{$g};
-      next if $f ne $system_ref->{osagent};                                        # skip processing on the first one
+      next if $system_ref->{osagent} eq "";
       $dup_ct += 1;                                                                # Add one to counter
       next if $dup_ct < 2;
       my $iscope = "-t " . $agent_ref->{pc};                                       # working on just OS Agent
@@ -387,10 +395,10 @@ foreach my $f (keys %agentx) {                                                  
          my $dpos = length($iname) - length($pname);
          $duphostname = substr($iname,0,$dpos) . $pname;
       }
-      my $outsh  = "./tacmd setagentconnection -n $f $iscope ";                    # tacmd setagentconnection for Linux/Unix
+      my $outsh  = "./tacmd setagentconnection -n $system_ref->{osagent} $iscope "; # tacmd setagentconnection for Linux/Unix
       $outsh .= "-e CTIRA_HOSTNAME=" . $duphostname . " ";
       $outsh .= "CTIRA_SYSTEM_NAME=" . $duphostname . " ";
-      my $outcmd = "tacmd setagentconnection -n $f $iscope ";                      # tacmd setagentconnection for Windows
+      my $outcmd = "tacmd setagentconnection -n $system_ref->{osagent} $iscope ";   # tacmd setagentconnection for Windows
       $outcmd .= "-e CTIRA_HOSTNAME=" . $duphostname . " ";
       $outcmd .= "CTIRA_SYSTEM_NAME=" . $duphostname . " ";
       print $dedup_sh_fh "$outsh\n";
@@ -1041,3 +1049,4 @@ sub init_lst {
 # 0.54000 - handle some non-OS Agent cases
 # 0.55000 - Don't use setagentconnection on MQ type agents
 #         - more non-os agent logic improvements
+# 0.56000 - Handke more non-OS Agent cases, do not change HD/WPA agents
