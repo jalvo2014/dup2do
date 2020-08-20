@@ -27,7 +27,7 @@ use strict;
 use warnings;
 use Data::Dumper;               # debug only
 
-my $gVersion = "0.57000";
+my $gVersion = "0.61000";
 my $gWin = (-e "C://") ? 1 : 0;    # 1=Windows, 0=Linux/Unix
 
 sub init_txt;
@@ -59,6 +59,11 @@ my @magent_subct = ();                   # count of subnode agents
 my @magent_sublen = ();                  # length of subnode agent list
 my @magent_tems_version = ();            # version of managing agent TEMS
 my @magent_tems = ();                    # TEMS name where managing agent reports
+
+my %instanced = (
+                   'LO' => 1,
+                   'RZ' => 1,
+                );
 
 
 
@@ -110,7 +115,7 @@ while (@ARGV) {
 }
 
 $opt_dupall = 0 if !defined $opt_dupall;
-$opt_dupsleep = 600 if !defined $opt_dupsleep;
+$opt_dupsleep = 660 if !defined $opt_dupsleep;
 
 # 1) if QA1DNSAV.DB.TXT or QA1DNSAV.DB.LST is present read in that data and create nodex and systemx reference hashes
 my $opt_txt_tnodesav = "QA1DNSAV.DB.TXT";
@@ -255,11 +260,17 @@ foreach $oneline (@ddup) {
                         sh => [],                    # pending output .sh lines
                         cmd => [],                   # pending output cmd lines
                         lines => -1,                 # index of high output line
-                        ephipx => {},                # count of ephemeral ip addresses
+                        ephipx => {},                # track ephemeral ip addresses
+                        sh_n => [],                  # pending output non-os  .sh lines
+                        cmd_n => [],                 # pending outout non-os .cmd lines
+                        osagent => 0,                # Is OS agent
+                        lines_n => -1,               # index of high output line
                      );
       $agent_ref = \%agentref;
       $agentx{$inode} = \%agentref;
    }
+   $agent_ref->{osagent} = 1 if defined $agtosx{$ipc}; # note osagent if present
+
    if (substr($iip,0,3) eq "0.0") {
       $agent_ref->{ephipx}{$iip} = 1;                   # track ip addresses [systems]
    } elsif (!defined $agent_ref->{ipx}{$iip}) {
@@ -276,12 +287,16 @@ foreach $oneline (@ddup) {
                          osagent => "",              # if there is a OS Agent, record its name here
                          tnodesav_lines => [],       # lines from TNODESAV if present
                          dedup_lines => [],          # lines from DEDUP.CSV
+                         nosagtx => {},              # non-OS Agents that have used this already
+                         newosagent => "",           # selected new agent name
+                         newhostname => "",          # selected new hostname
+                         hostname => "",             # calculated old hostname
                       );
       $system_ref = \%systemref;
       $systemx{$iip} = \%systemref;
    }
    $system_ref->{count} += 1;                        # count of agents on system
-   $system_ref->{osagent} = $inode if defined $agtosx{$ipc}; # record osagent if present
+   $system_ref->{osagent} = $inode if defined $agtosx{$ipc};# record os agent
    push @{$system_ref->{agents}},$inode;             # add one more to the lists
    push @{$system_ref->{dedup_lines}},$oneline;      # add one more to the lists
 }
@@ -355,61 +370,21 @@ my $dup_ct;
 
 foreach my $f (sort { $a cmp $b } keys %agentx) {   # sort agents to ensure repeatability
    my $agent_ref=$agentx{$f};
-   my $ephc = scalar keys %{$agent_ref->{ephipx}};
+   next if $agent_ref->{osagent} == 0;                # Only handle OS Agents - Stage 2
+   my $iosagent = $f;
+   my $ephc = scalar keys %{$agent_ref->{ephipx}};    # count of ephemeral addresses
+   my $do1eph = ($ephc > 0);
    if ($ephc > 1) {
-      my $outsh  = "# Agent $f connects from $ephc ephemeral addresses and $agent_ref->{count} ip address  - needs manual configuration";    # tacmd setagentconnection for Linux/Unix
-      my $outcmd = "REM Agent $f connects from $ephc ephemeral addresses and $agent_ref->{count} ip address  - needs manual configuration";    # tacmd setagentconnection for Linux/Unix
+      my $outsh  = "# Agent $f connects from $ephc ephemeral addresses and $agent_ref->{count} ip address  - may need manual configuration";    # tacmd setagentconnection for Linux/Unix
+      my $outcmd = "REM Agent $f connects from $ephc ephemeral addresses and $agent_ref->{count} ip address  - may need manual configuration";    # tacmd setagentconnection for Linux/Unix
       push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
       push @{$agent_ref->{cmd}},$outsh;                                              # add pending line to cmd
       $agent_ref->{lines} += 1;                                                      # count of pending lines
-      next;
    }
-   next if $agent_ref->{count} < 2;                                   # ignore if less than two examples
-   my $tot_ct = 0;                                                    # count of possible cases, where an OS Agent is present
-   my $sys = "";
-   $dup_ct = 0;
-   foreach my $g (sort { $a cmp $b } keys %{$agent_ref->{ipx}}) {                                     # calculate number of OS Agents
+   next if ($agent_ref->{count} + $do1eph) < 2;                       # ignore if less than two examples
+   $dup_ct = int($ephc > 0);                                             # don't skip if ephemerals
+   foreach my $g ( sort { $b cmp $a } keys %{$agent_ref->{ipx}}) {
       my $system_ref = $systemx{$g};
-      $sys .= $g . " ";
-      $tot_ct += 1 if $system_ref->{osagent} ne "";
-   }
-   chop $sys if $sys ne "";
-   if ($tot_ct == 0) {   # duplicate agent without OS Agent
-      my $outsh  = "# Agent $f on systems[$sys] has no identified OS Agents";        # tacmd setagentconnection for Linux/Unix
-      my $outcmd  = "REM Agent $f on systems[$sys] has no identified OS Agents";     # tacmd setagentconnection for Windows
-      push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
-      push @{$agent_ref->{cmd}},$outsh;                                              # add pending line to cmd
-      $agent_ref->{lines} += 1;                                                      # count of pending lines
-      next;
-   }
-   if ($agent_ref->{pc} eq "Warehouse") {
-      my $outsh  = "# Agent $f is a WPA on systems[$sys] and needs manual configuration";        # tacmd setagentconnection for Linux/Unix
-      my $outcmd  = "REM Agent $f is a WPA on systems[$sys] and needs manual configuration";     # tacmd setagentconnection for Windows
-      push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
-      push @{$agent_ref->{cmd}},$outsh;                                              # add pending line to cmd
-      $agent_ref->{lines} += 1;                                                      # count of pending lines
-      next;
-   }
-   if ($agent_ref->{pc} eq "MQ") {
-      my $outsh  = "# Agent $f is on systems[$sys] and cfg file needs SET AGENT NAME set";       # tacmd setagentconnection for Linux/Unix
-      my $outcmd  = "REM Agent $f is on systems[$sys] and cfg file needs SET AGENT NAME set";    # tacmd setagentconnection for Windows
-      push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
-      push @{$agent_ref->{cmd}},$outsh;                                              # add pending line to cmd
-      $agent_ref->{lines} += 1;                                                      # count of pending lines
-      next;
-   }
-   if ($agent_ref->{pc} eq "") {
-      my $outsh  = "# Agent $f is on systems[$sys] and the agent type is unknown - needs manual configuration";    # tacmd setagentconnection for Linux/Unix
-      my $outcmd  = "REM Agent $f is on systems[$sys] and the agent type is unknown - needs manual configuration"; # tacmd setagentconnection for Windows
-      push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
-      push @{$agent_ref->{cmd}},$outsh;                                              # add pending line to cmd
-      $agent_ref->{lines} += 1;                                                      # count of pending lines
-      next;
-   }
-   $dup_ct = 0;
-   foreach my $g ( sort { $a cmp $b } keys %{$agent_ref->{ipx}}) {
-      my $system_ref = $systemx{$g};
-      next if $system_ref->{osagent} eq "";
       $dup_ct += 1;                                                                # Add one to counter
       next if $dup_ct < 2;                                                         # leave first duplicate alone
       my $iscope = "-t " . $agent_ref->{pc};                                       # working on just OS Agent
@@ -426,10 +401,10 @@ foreach my $f (sort { $a cmp $b } keys %agentx) {   # sort agents to ensure repe
          my $dpos = length($iname) - length($pname);
          $duphostname = substr($iname,0,$dpos) . $pname;
       }
-      my $outsh  = "./tacmd setagentconnection -n $system_ref->{osagent} $iscope "; # tacmd setagentconnection for Linux/Unix
+      my $outsh  = "./tacmd setagentconnection -n $iosagent $iscope "; # tacmd setagentconnection for Linux/Unix
       $outsh .= "-e CTIRA_HOSTNAME=" . $duphostname . " ";
-      $outsh .= "CTIRA_SYSTEM_NAME=" . $duphostname . " ";
-      my $outcmd = "tacmd setagentconnection -n $system_ref->{osagent} $iscope ";   # tacmd setagentconnection for Windows
+      $outsh .= "CTIRA_SYSTEM_NAME=" . $duphostname . " " . "\# $g";
+      my $outcmd = "tacmd setagentconnection -n $iosagent $iscope ";   # tacmd setagentconnection for Windows
       $outcmd .= "-e CTIRA_HOSTNAME=" . $duphostname . " ";
       $outcmd .= "CTIRA_SYSTEM_NAME=" . $duphostname . " ";
       push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
@@ -437,10 +412,157 @@ foreach my $f (sort { $a cmp $b } keys %agentx) {   # sort agents to ensure repe
       $agent_ref->{lines} += 1;                                                      # count of pending lines
       my $newagent = $f;
       $newagent =~ s/$agent_ref->{hostname}/$duphostname/;                           # remember the new agent name
+      $system_ref->{newosagent} = $newagent;                                         # record for second pass - non-os agents
+      $system_ref->{newhostname} = $duphostname;
       push @{$agent_ref->{newagents}},$newagent;
    }
    $dup_ct -= 1;                                                                     # reduce count for skipped first one
    $max_ct = $dup_ct if $dup_ct > $max_ct;
+}
+
+# 6) repeat for non-os agents
+
+foreach my $f (sort { $a cmp $b } keys %agentx) {   # sort agents to ensure repeatability
+   my $agent_ref=$agentx{$f};
+   my $iosagent = "";
+   next if $agent_ref->{osagent} == 1;                # os agents already handled
+   my $ephc = scalar keys %{$agent_ref->{ephipx}};    # count of ephemeral addresses
+   my $do1eph = ($ephc > 0);
+   if ($ephc > 1) {
+      my $outsh  = "# Agent $f connects from $ephc ephemeral addresses and $agent_ref->{count} ip address  - may need manual configuration";    # tacmd setagentconnection for Linux/Unix
+      my $outcmd = "REM Agent $f connects from $ephc ephemeral addresses and $agent_ref->{count} ip address  - may need manual configuration";    # tacmd setagentconnection for Linux/Unix
+      push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+   }
+   next if ($agent_ref->{count} + $do1eph) < 2;                       # ignore if less than two examples
+   my $tot_ct = 0;                                                    # count of possible cases, where an OS Agent is present
+   my $sys = "";
+   foreach my $g (sort { $a cmp $b } keys %{$agent_ref->{ipx}}) {                                     # calculate number of OS Agents
+      my $system_ref = $systemx{$g};
+      $sys .= $g . " ";
+      if ($system_ref->{osagent} ne "") {
+         $tot_ct += 1;
+         $iosagent = $system_ref->{osagent} if $iosagent eq "";
+      }
+   }
+   chop $sys if $sys ne "";
+   my $peph = "";
+   foreach my $g (sort { $a cmp $b } keys %{$agent_ref->{ephipx}}) {                                     # calculate number of OS Agents
+      $peph .= $g . " ";
+   }
+   chop $peph if $peph ne "";
+   if (defined $instanced{$agent_ref->{pc}}) {
+      my $outsh  = "# Agent $f on systems[$sys $peph] is instanced and needs manual configuration";        # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f on systems[$sys $peph] is instanced and needs manual configuration";     # tacmd setagentconnection for Windows
+      push @{$agent_ref->{sh_n}},$outsh;                                             # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                    # count of pending lines
+      next;
+   }
+   if ($iosagent eq "") {      # duplicate agent without OS Agent
+      my $outsh  = "# Agent $f on systems[$sys] has no identified OS Agents";        # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f on systems[$sys] has no identified OS Agents";     # tacmd setagentconnection for Windows
+      push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outcmd;                                             # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+      next;
+   }
+   if ($agent_ref->{pc} eq "Warehouse") {
+      my $outsh  = "# Agent $f is a WPA on systems[$sys] and needs manual configuration";        # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f is a WPA on systems[$sys] and needs manual configuration";     # tacmd setagentconnection for Windows
+      push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+      next;
+   }
+   if ($agent_ref->{pc} eq "TEPS") {
+      my $outsh  = "# Agent $f is a TEPS on systems[$sys] and needs manual configuration";        # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f is a TEPS on systems[$sys] and needs manual configuration";     # tacmd setagentconnection for Windows
+      push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+      next;
+   }
+   if ($agent_ref->{pc} eq "MQ") {
+      my $outsh  = "# Agent $f is on systems[$sys] and cfg file needs SET AGENT NAME set";       # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f is on systems[$sys] and cfg file needs SET AGENT NAME set";    # tacmd setagentconnection for Windows
+      push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+      next;
+   }
+   if ($agent_ref->{pc} eq "") {
+      my $outsh  = "# Agent $f is on systems[$sys] and the agent type is unknown - needs manual configuration";    # tacmd setagentconnection for Linux/Unix
+      my $outcmd  = "REM Agent $f is on systems[$sys] and the agent type is unknown - needs manual configuration"; # tacmd setagentconnection for Windows
+      push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+      next;
+   }
+   $dup_ct = ($ephc > 0);                                             # don't skip if ephemerals
+   foreach my $g ( sort { $b cmp $a } keys %{$agent_ref->{ipx}}) {
+      my $system_ref = $systemx{$g};
+      if (!defined $system_ref) {
+         my $outsh  = "# Agent $f is on system[$g] but there is no identified OS Agent - needs manual configuration";    # tacmd setagentconnection for Linux/Unix
+         my $outcmd  = "REM Agent $f is on system[$g] but there is no identified OS Agent - needs manual configuration"; # cmd setagentconnection for Windows
+         push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+         push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+         $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+         next;
+      }
+      # case where duplicate agent is probably OK but an ephmeral is conflicting
+      # we cannot change ephemeral-ized agent, so need to change this one
+
+      if (!defined $system_ref->{newosagent}) {
+         my $duphostname;
+         if (defined $system_ref->{osagent}) {
+            my $name_ct = $dup_ct - 1;                                                   # calculate the duplicate hostname
+            my $iname =  $system_ref->{hostname};
+            my $headway = 32 - length($iname);
+            my $pname =  "-DUP" . $name_ct;
+            my $plen = length($pname);
+            if ($plen <= $headway) {
+               $duphostname = $iname . $pname;
+            } else {
+              my $dpos = length($iname) - length($pname);
+              $duphostname = substr($iname,0,$dpos) . $pname;
+            }
+         }
+         $system_ref->{newhostname} = $duphostname;
+         $system_ref->{newosagent} = $system_ref->{osagent};
+      }
+      if (!defined $system_ref->{newosagent}) {
+         my $outsh  = "# Agent $f is on system[$g] but there is no new osagent name - needs manual configuration";    # tacmd setagentconnection for Linux/Unix
+         my $outcmd  = "REM Agent $f is on system[$g] but there is no new osagent name - needs manual configuration"; # cmd setagentconnection for Windows
+         push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+         push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+         $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+         next;
+      }
+      $dup_ct += 1;                                                                # Add one to counter
+      next if $dup_ct < 2;                                                         # leave first duplicate alone
+      if (defined $system_ref->{nosagent}{$agent_ref->{pc}}) {
+         my $outsh  = "# Agent $f is on system[$g] agent product code already processed - needs manual configuration";    # tacmd setagentconnection for Linux/Unix
+         my $outcmd  = "REM Agent $f is on system[$g] agent product code already processed - needs manual configuration"; # cmd setagentconnection for Windows
+         push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+         push @{$agent_ref->{cmd_n}},$outsh;                                              # add pending line to cmd
+         $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+         next;
+      }
+      my $iscope = "-t " . $agent_ref->{pc};                                       # working on just OS Agent
+      $iscope = "-a" if defined $dupallx{$agent_ref->{hostname}};                  # working on all agents where OS Agent is running
+      my $outsh  = "./tacmd setagentconnection -n $system_ref->{newosagent} " . $iscope . " "; # tacmd setagentconnection for Linux/Unix
+      $outsh .= "-e CTIRA_HOSTNAME=" . $system_ref->{newhostname} . " ";
+      $outsh .= "CTIRA_SYSTEM_NAME=" . $system_ref->{newhostname} . " " . "\# $g";
+      my $outcmd = "tacmd setagentconnection -n $system_ref->{newosagent} " . $iscope . " "; # tacmd setagentconnection for Windows
+      $outcmd .= "-e CTIRA_HOSTNAME=" . $system_ref->{newhostname} . " ";
+      $outcmd .= "CTIRA_SYSTEM_NAME=" . $system_ref->{newhostname} . " ";
+      push @{$agent_ref->{sh_n}},$outsh;                                               # add pending line to sh
+      push @{$agent_ref->{cmd_n}},$outcmd;                                              # add pending line to cmd
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
+      $system_ref->{nosagent}{$agent_ref->{pc}} = 1;
+   }
 }
 
 # All the pending lines have been created - time to emit them.
@@ -454,30 +576,92 @@ open $dedup_sh_fh, ">", $opt_dedup_sh or die "can't open $opt_dedup_sh: $!";
 binmode $dedup_sh_fh ;
 open $dedup_cmd_fh, ">", $opt_dedup_cmd or die "can't open $opt_dedup_cmd: $!";
 
+my $sleep_ct = -1;
 my $iprocess;
 for (my $l=0; $l<=$max_ct; $l++) {    # $l is the pending line level
    $iprocess = 0;
    foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
       my $agent_ref=$agentx{$f};
+      next if $agent_ref->{osagent} == 0;
+      next if $agent_ref->{lines} < $l;
+      $iprocess += 1;
+   }
+   $sleep_ct += 1 if $iprocess > 0;
+}
+
+my $sleep_cur = 0;
+for (my $l=0; $l<=$max_ct; $l++) {    # $l is the pending line level
+   $iprocess = 0;
+   foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
+      my $agent_ref=$agentx{$f};
+      next if $agent_ref->{osagent} == 0;
       next if $agent_ref->{lines} < $l;
       print $dedup_sh_fh $agent_ref->{sh}[$l]. "\n";
       print $dedup_cmd_fh $agent_ref->{cmd}[$l]. "\n";
       $iprocess += 1;
    }
    if ($iprocess > 0) {
-      if ($l < $max_ct) {
+      if ($sleep_cur < $sleep_ct) {
          # delay after processing all agents at a certain level
          # that gives time for the duplicate agents to register
          print $dedup_sh_fh "sleep $opt_dupsleep\n" if $opt_dupsleep != 0;                               # sleep in Linux/Unix
          print $dedup_cmd_fh "choice /C YNC /D Y /N /T $opt_dupsleep >NUL 2>&1\n" if $opt_dupsleep != 0; # sleep in Windows
+         $sleep_cur += 1;
       }
    }
 }
 close $dedup_sh_fh;
 close $dedup_cmd_fh;
 
+# All the pending lines have been created - time to emit them.
+my $opt_dedup_n_sh;                               # names of output files, unix-style sh and Windows syle cmd
+my $dedup_n_sh_fh;
+my $opt_dedup_n_cmd;
+my $dedup_n_cmd_fh;
+$opt_dedup_n_cmd = "dedup_nos.cmd";
+$opt_dedup_n_sh  = "dedup_nos.sh";
+open $dedup_n_sh_fh, ">", $opt_dedup_n_sh or die "can't open $opt_dedup_n_sh: $!";
+binmode $dedup_n_sh_fh ;
+open $dedup_n_cmd_fh, ">", $opt_dedup_n_cmd or die "can't open $opt_dedup_n_cmd: $!";
 
-# 6) extract relevant data from sitinfo.csv
+$sleep_ct = -1;
+for (my $l=0; $l<=$max_ct; $l++) {    # $l is the pending line level
+   $iprocess = 0;
+   foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
+      my $agent_ref=$agentx{$f};
+      next if $agent_ref->{osagent} == 1;
+      next if $agent_ref->{lines_n} < $l;
+      $iprocess += 1;
+   }
+   $sleep_ct += 1 if $iprocess > 0;
+}
+
+$sleep_cur = 0;
+for (my $l=0; $l<=$max_ct; $l++) {    # $l is the pending line level
+   $iprocess = 0;
+   foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
+      my $agent_ref=$agentx{$f};
+      next if $agent_ref->{osagent} == 1;
+      next if $agent_ref->{lines_n} < $l;
+      print $dedup_n_sh_fh $agent_ref->{sh_n}[$l]. "\n";
+      print $dedup_n_cmd_fh $agent_ref->{cmd_n}[$l]. "\n";
+      $iprocess += 1;
+   }
+   if ($iprocess > 0) {
+      if ($sleep_cur < $sleep_ct) {
+         # delay after processing all agents at a certain level
+         # that gives time for the duplicate agents to register
+         print $dedup_n_sh_fh "sleep $opt_dupsleep\n" if $opt_dupsleep != 0;                               # sleep in Linux/Unix
+         print $dedup_n_cmd_fh "choice /C YNC /D Y /N /T $opt_dupsleep >NUL 2>&1\n" if $opt_dupsleep != 0; # sleep in Windows
+         $sleep_cur += 1;
+      }
+   }
+}
+close $dedup_n_sh_fh;
+close $dedup_n_cmd_fh;
+
+
+# 7) extract relevant data from sitinfo.csv
 #    stage I - situations involved with duplicated agents
 #    stage II - distributions involved with duplicated agents
 
@@ -486,7 +670,10 @@ my %sitdx;                                                       # track Situati
 my $sitinfo_fn = "sitinfo.csv";
 my $sitinfo_fh;
 
-die "no sitinfo.csv report file" if ! -e $sitinfo_fn;
+if (! -e $sitinfo_fn) {
+  warn "no sitinfo.csv report file - unable to create all files";
+  exit 0;
+}
 open $sitinfo_fh, "<", $sitinfo_fn || die("Could not open sitinfo report  $sitinfo_fn\n");
 
 my $l = 0;
@@ -863,13 +1050,38 @@ sub new_tnodesav {
                          osagent => "",              # if there is a OS Agent, record its name here
                          tnodesav_lines => [],       # lines from TNODESAV if present
                          dedup_lines => [],          # lines from DEDUP.CSV
+                         hostname => "",
                       );
       $system_ref = \%systemref;
       $systemx{$iip} = \%systemref;
    }
    $system_ref->{count} += 1;                        # count of agents on system
    push @{$system_ref->{agents}},$inode;             # add one more to the lists
-   $system_ref->{osagent} = $inode if defined $agtosx{$iproduct}; # set os agent name if suffix is correct
+   my $ihostname = "";                            # the calculated hostname based on agent name.
+   my $ipc = "";
+   my $tnode = $inode;
+   $tnode =~ s/[^:]//g;
+   my $ncolons = length($tnode);
+   my @wnodes = split(":",$inode);
+   if ($ncolons == 0) {
+      $ihostname = $inode;
+   } elsif ($ncolons == 1) {
+      $ihostname = $wnodes[0];
+      $ipc       = $wnodes[1];
+      $ipc = "" if !defined $wnodes[1];
+   } elsif ($ncolons == 2) {
+      $ihostname = $wnodes[1];
+      $ipc       = $wnodes[2];
+      $ipc = "" if !defined $wnodes[2];
+   } elsif ($ncolons >= 3) {
+      $ihostname = $wnodes[2];
+      $ipc       = $wnodes[3];
+      $ipc = "" if !defined $wnodes[3];
+   }
+   if (defined $agtosx{$ipc}) {
+      $system_ref->{osagent} = $inode;               # record osagent if present
+      $system_ref->{hostname}  = $ihostname;
+   }
 
    my $oline = "msn,";
    $oline .= $inode . ",";
@@ -1112,3 +1324,7 @@ sub init_lst {
 #         - more non-os agent logic improvements
 # 0.56000 - Handle more non-OS Agent cases, do not change HD/WPA agents
 # 0.57000 - Handle multiple levels better,warn multiple ephemerals
+# 0.58000 - Handle OS agents and non-OS agents separately, track more error cases
+# 0.59000 - Handle non-OS Instanced agents better
+# 0.60000 - On OS Agents, process even if missing in TNODESAV
+# 0.61000 - Handle case where only dedup.csv is present
