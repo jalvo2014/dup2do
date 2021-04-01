@@ -27,7 +27,7 @@ use strict;
 use warnings;
 use Data::Dumper;               # debug only
 
-my $gVersion = "0.64000";
+my $gVersion = "0.65000";
 my $gWin = (-e "C://") ? 1 : 0;    # 1=Windows, 0=Linux/Unix
 
 sub init_txt;
@@ -272,7 +272,6 @@ foreach $oneline (@ddup) {
                         newagents => [],             # all new agent names, ones with -DUPn appended
                         sh => [],                    # pending output .sh lines
                         cmd => [],                   # pending output cmd lines
-                        lines => -1,                 # index of high output line
                         ephipx => {},                # track ephemeral ip addresses
                         sh_n => [],                  # pending output non-os  .sh lines
                         cmd_n => [],                 # pending outout non-os .cmd lines
@@ -420,7 +419,7 @@ foreach my $f (sort { $a cmp $b } keys %agentx) {   # sort agents to ensure repe
       my $outcmd = "REM Agent $f connects from $ephc ephemeral addresses and $agent_ref->{count} ip address  - may need manual configuration";    # tacmd setagentconnection for Linux/Unix
       push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
       push @{$agent_ref->{cmd}},$outcmd;                                             # add pending line to cmd
-      $agent_ref->{lines} += 1;                                                      # count of pending lines
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
    }
    next if ($agent_ref->{count} + $do1eph) < 2;                       # ignore if less than two examples
    $dup_ct = int($ephc > 0);                                             # don't skip if ephemerals
@@ -433,7 +432,7 @@ foreach my $f (sort { $a cmp $b } keys %agentx) {   # sort agents to ensure repe
             my $outcmd = "REM Agent $f on system {$g} with $osagtd_ref->{count} OS Agents - will need manual configuration";    # tacmd setagentconnection for Linux/Unix
             push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
             push @{$agent_ref->{cmd}},$outcmd;                                             # add pending line to cmd
-            $agent_ref->{lines} += 1;                                                      # count of pending lines
+            $agent_ref->{lines_n} += 1;                                                      # count of pending lines
             next;
          }
       }
@@ -461,7 +460,7 @@ foreach my $f (sort { $a cmp $b } keys %agentx) {   # sort agents to ensure repe
       $outcmd .= "CTIRA_SYSTEM_NAME=" . $duphostname . " ". "&REM " . $g;
       push @{$agent_ref->{sh}},$outsh;                                               # add pending line to sh
       push @{$agent_ref->{cmd}},$outcmd;                                              # add pending line to cmd
-      $agent_ref->{lines} += 1;                                                      # count of pending lines
+      $agent_ref->{lines_n} += 1;                                                      # count of pending lines
       my $newagent = $f;
       $newagent =~ s/$agent_ref->{hostname}/$duphostname/;                           # remember the new agent name
       $system_ref->{newosagent} = $newagent;                                         # record for second pass - non-os agents
@@ -606,7 +605,7 @@ for (my $l=0; $l<=$max_ct; $l++) {    # $l is the pending line level
    foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
       my $agent_ref=$agentx{$f};
       next if $agent_ref->{osagent} == 0;
-      next if $agent_ref->{lines} < $l;
+      next if $agent_ref->{lines_n} < $l;
       $iprocess += 1;
    }
    $sleep_ct += 1 if $iprocess > 0;
@@ -618,7 +617,7 @@ for (my $l=0; $l<=$max_ct; $l++) {    # $l is the pending line level
    foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
       my $agent_ref=$agentx{$f};
       next if $agent_ref->{osagent} == 0;
-      next if $agent_ref->{lines} < $l;
+      next if $agent_ref->{lines_n} < $l;
       print $dedup_sh_fh $agent_ref->{sh}[$l]. "\n";
       print $dedup_cmd_fh $agent_ref->{cmd}[$l]. "\n";
       $iprocess += 1;
@@ -659,6 +658,7 @@ for (my $l=0; $l<=$max_ct; $l++) {    # $l is the pending line level
    foreach my $f (sort { $a cmp $b } keys %agentx) {                                                     # look at each agent
       my $agent_ref=$agentx{$f};
       next if $agent_ref->{osagent} == 1;
+      next if $l > $agent_ref->{lines_n};
       next if (substr($agent_ref->{cmd_n}[$l],0,3) eq "REM") or (substr($agent_ref->{sh_n}[$l],0,1) eq "#");
       next if $agent_ref->{lines_n} < $l;
       print $dedup_sh_fh $agent_ref->{sh_n}[$l] . "\n";
@@ -1373,3 +1373,4 @@ sub init_lst {
 # 0.62000 - handle KUL case
 # 0.63000 - Two stage logic, first OS Agents and second non-OS Agents
 # 0.64000 - Handle non-OS agents better
+# 0.65000 - Handle comments and line counts better
